@@ -19,36 +19,33 @@ library(rmr2)
 library(quickcheck)
 
 #qw
-unit.test(
-  function(ss) {
+test(
+  function(ss = rcharacter()) {
     ss = paste("v", ss, sep = "")
-    ss == eval(parse(text = paste("rmr2:::qw(", paste(ss, collapse = ","), ")")))},
-  list(rcharacter))
+    all(ss == eval(parse(text = paste("rmr2:::qw(", paste(ss, collapse = ","), ")"))))})
 
 # Make.single.arg
-unit.test(
-  function(l) {
+test(
+  function(l = rlist()) {
     f = function(...) list(...)
     g = rmr2:::Make.single.arg(f)
-    identical(do.call(f, l), g(l))},
-  list(rlist))
+    identical(do.call(f, l), g(l))})
                   
 # Make.multi.arg
-unit.test(
-  function(l) {
+test(
+  function(l = rlist()) {
     f = function(x) x
     g = rmr2:::Make.multi.arg(f)
-    identical(do.call(g, l), f(l))},
-  list(rlist))
+    identical(do.call(g, l), f(l))})
 
 # Make.single.or.multi.arg
-unit.test(
-  function(l, arity) {
-    f = if(arity == "single") identity else c 
+test(
+  function(
+    l = rlist(size = c(min = 2)), 
+    arity = sample(c("single", "multi"), size = 1)) {
+    f = if(arity == "single") unlist else c 
     g = rmr2:::Make.single.or.multi.arg(f, from = arity)
-    identical(g(l), do.call(g, l))},
-  list(rlist,
-       make.rselect(rmr2:::qw(single, multi))))
+    identical(g(l), do.call(g, l))})
 
 #%:% TODO
 # all.predicate TODO
@@ -56,7 +53,7 @@ unit.test(
 # make.fast.list TODO
 # actually the function has been working forever, the test doesn't
 
-# unit.test(
+# test(
 #   function(l){
 #     fl = rmr2:::make.fast.list()
 #     lapply(l, fl)

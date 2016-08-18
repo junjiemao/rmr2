@@ -13,20 +13,71 @@
 # limitations under the License.
 
 ##app-specific generators
-if(require(quickcheck)) {
-  rkeyval = function(keytdg = rdouble, valtdg = make.rany()) keyval(keytdg(), valtdg())
-  rkeyvalsimple = function() keyval(runif(1), runif(1))} #we can do better than this
+if(require(quickcheck)){
+  
+  curry.size = 
+    function(gen, size) {
+      force(gen)
+      Curry(gen,  size = size)}
+  
+  curry.nrow = 
+    function(gen, nrow) {
+      force(gen)
+      Curry(gen,  nrow = nrow, ncol = c(min = 1))}
+  
+  rrmr.data = 
+    function(size = c(min = 0, max = quickcheck::default(vector.size %||% 5 * severity)))
+      quickcheck::mixture(
+        generators = 
+          c(
+            lapply(
+              list(
+                quickcheck::rlogical, 
+                quickcheck::rinteger, 
+                quickcheck::rdouble, 
+                quickcheck::rcharacter, 
+                quickcheck::rraw, 
+                quickcheck::rfactor, 
+                quickcheck::rlist), 
+              curry.size, size = size), 
+            lapply(
+              list(
+                quickcheck::rmatrix, 
+                quickcheck::rdata.frame),
+              curry.nrow, nrow = size)))()
+  
+  rdata.frame.simple = 
+    function(
+      nrow = c(min = 1, max = quickcheck::default(data.frame.nrow %||% 5 * severity)),
+      ncol = c(min = 1, max = quickcheck::default(data.frame.ncol %||% severity)))
+      rdata.frame(
+        generator = 
+          mixture(
+            generators = 
+              list(
+                quickcheck::rlogical, 
+                quickcheck::rinteger, 
+                quickcheck::rdouble, 
+                quickcheck::rcharacter)),
+        nrow = nrow,
+        ncol = ncol)
+  
+rkeyval = 
+  function(k = rrmr.data(size = c(min = 1)), v = rrmr.data(size = c(min = 1)))
+    keyval(k, v)
+
+rkeyvalsimple = function() keyval(runif(1), runif(1)) #we can do better than this
 
 ## generic sorting for normalized comparisons
 gorder = function(...) UseMethod("gorder")
 gorder.default = order
 gorder.factor = function(x) order(as.character(x))
 gorder.data.frame = 
-  function(x) splat(gorder)(lapply(x, function(x) if(is.factor(x)) as.character(x) else if(is.list(x) || is.raw(x)) cksum(x) else x))
+  function(x) splat(gorder)(lapply(x, function(x) if(is.factor(x)) as.character(x) else if(is.list(x) || is.raw(x)) sapply(x, digest) else x))
 gorder.matrix = function(x) gorder(as.data.frame(x))
-gorder.raw = gorder.list = function(x) gorder(cksum(x))
+gorder.raw = gorder.list = function(x) gorder(sapply(x, digest))
 
-reorder = function(x, o) if(rmr2:::has.rows(x)) x[o, , drop = FALSE] else x[o]
+reorder = function(x, o) if(has.rows(x)) x[o, , drop = FALSE] else x[o]
 
 gsort = function(x) reorder(x, gorder(x))
 
@@ -39,10 +90,12 @@ gsort.keyval =
       else 
         gorder(
           data.frame(
-            if(is.list(k) && !is.data.frame(k)) cksum(k) else k,
-            if(is.list(v) && !is.data.frame(v)) cksum(v) else v))}
+            if(is.list(k) && !is.data.frame(k)) sapply(k, digest) else k,
+            if(is.list(v) && !is.data.frame(v)) sapply(v, digest) else v))}
     keyval(reorder(k, o), reorder(v, o))}
 
 ## keyval compare
 kv.cmp = function(kv1, kv2) 
   isTRUE(all.equal(gsort.keyval(kv1), gsort.keyval(kv2), tolerance=1e-4, check.attributes=FALSE))
+
+}

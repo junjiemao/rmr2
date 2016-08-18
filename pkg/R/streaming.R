@@ -81,7 +81,7 @@ attempt.id =
 activate.profiling = function(profile) {
   dir = 
     file.path(
-      rmr.options("dfs.tempdir"),
+      "/tmp",
       "Rprof", 
       job.id(), 
       attempt.id())
@@ -202,6 +202,10 @@ rmr.stream =
     backend.parameters, 
     verbose, 
     debug) {
+    out.folder = rmr.normalize.path(out.folder)
+    tempfile = 
+      function(...)
+        rmr.normalize.path(base::tempfile(...))
     pkg.opts = as.list(rmr.options.env)
     profile.nodes = pkg.opts$profile.nodes
     
@@ -215,7 +219,7 @@ rmr.stream =
     work.dir = "."
     rmr.local.env = tempfile(pattern = "rmr-local-env")
     rmr.global.env = tempfile(pattern = "rmr-global-env")
-        
+    
     preamble = paste(sep = "", '
   sink(file = stderr())
   options(warn = 1) 
@@ -232,12 +236,17 @@ rmr.stream =
       load("',file.path(work.dir, basename(rmr.local.env)),'")
     else 
       load("',file.path(work.dir, basename(rmr.local.env)),'", verbose = TRUE))
-    lapply(
-      libs, 
-        function(l)
-          if (!require(l, character.only = TRUE)) 
-            warning(paste("can\'t load", l)))
-    sink(NULL)
+  lapply(
+    libs, 
+      function(l)
+        if (!require(l, character.only = TRUE)) 
+          warning(paste("can\'t load", l)))
+  invisible(
+    if(is.null(formals(load)$verbose)) #recent R change
+      load("',file.path(work.dir, basename(rmr.local.env)),'")
+    else 
+      load("',file.path(work.dir, basename(rmr.local.env)),'", verbose = TRUE))
+  sink(NULL)
     input.reader = 
       function()
         rmr2:::make.keyval.reader(
@@ -276,7 +285,7 @@ rmr.stream =
     vectorized = vectorized.reduce, 
     map.only = !has.reduce)
 '
-  reduce.line = '  
+    reduce.line = '  
   rmr2:::reduce.loop(
     reduce = reduce, 
     vectorized = vectorized.reduce,
@@ -286,7 +295,7 @@ rmr.stream =
     profile = profile.nodes)
 '
     
-  combine.line = '  
+    combine.line = '  
   rmr2:::reduce.loop(
     reduce = combine, 
     vectorized = vectorized.reduce,
@@ -331,17 +340,17 @@ rmr.stream =
     default.input.format = make.input.format("native")
     default.output.format = make.output.format("native")
     
-    libs = sub("package:", "", grep("package", search(), value = TRUE))
+    libs = sub("package:", "", grep("package", rev(search()), value = TRUE))
     image.files = 
-    c(
-      save.env(
-        environment(), 
-        rmr.local.env, 
-        NULL),
-      save.env(
-        .GlobalEnv, 
-        rmr.global.env, 
-        pkg.opts$exclude.objects))
+      c(
+        save.env(
+          environment(), 
+          rmr.local.env, 
+          NULL),
+        save.env(
+          .GlobalEnv, 
+          rmr.global.env, 
+          pkg.opts$exclude.objects))
     ## prepare hadoop streaming command
     hadoop.command = hadoop.streaming()
     input = make.input.files(in.folder)
@@ -369,17 +378,17 @@ rmr.stream =
         paste(
           rscript, 
           file.path(work.dir, basename(map.file))))
-  if(!is.null(reduce))
-    reducer = 
-    paste.options(
+    if(!is.null(reduce)) {
       reducer = 
-        paste(
-          rscript, 
-          file.path(work.dir, basename(reduce.file))))
-  else {
-    reducer = ""
-    reduce.file = NULL }
-  if(is.function(combine)) {
+        paste.options(
+          reducer = 
+            paste(
+              rscript, 
+              file.path(work.dir, basename(reduce.file))))}
+    else {
+      reducer = ""
+      reduce.file = NULL }
+    if(is.function(combine)) {
       combiner = 
         paste.options(
           combiner = 
@@ -390,45 +399,57 @@ rmr.stream =
     else {
       combiner = ""
       combine.file = NULL}
-  if(is.null(reduce) && 
-       !is.element(
-         "mapred.reduce.tasks",
-         sapply(
-           strsplit(as.character(named.slice(backend.parameters, 'D')), '='), 
-           function(x)x[[1]])))
-    backend.parameters = c(list(D = 'mapred.reduce.tasks=0'), backend.parameters)
-  #debug.opts = "-mapdebug kdfkdfld -reducexdebug jfkdlfkja"
-  
-  on.exit(splat(file.remove)(c(image.files, map.file, reduce.file, combine.file)), add = TRUE)
-  
-  final.command = 
-    paste(
-      hadoop.command, 
-      stream.mapred.io,  
-      if(is.null(backend.parameters)) ""
-      else
-        do.call(paste.options, backend.parameters), 
-      paste.options(
-        files = 
-          paste(
-            collapse = ",",           
-            c(image.files, map.file, reduce.file, combine.file))),
-      input, 
-      output, 
-      mapper, 
-      combiner,
-      reducer, 
+    if(is.null(reduce) && 
+         !is.element(
+           "mapred.reduce.tasks",
+           sapply(
+             strsplit(as.character(named.slice(backend.parameters, 'D')), '='), 
+             function(x)x[[1]])))
+      backend.parameters = c(list(D = 'mapred.reduce.tasks=0'), backend.parameters)
+    #debug.opts = "-mapdebug kdfkdfld -reducexdebug jfkdlfkja"
+    
+    on.exit(splat(file.remove)(c(image.files, map.file, reduce.file, combine.file)), add = TRUE)
+    
+    final.command = 
+      paste(
+        hadoop.command, 
+        stream.mapred.io,  
+        if(is.null(backend.parameters)) ""
+        else
+          do.call(paste.options, backend.parameters), 
+        paste.options(
+          files = 
+            paste(
+              collapse = ",",           
+              c(image.files, map.file, reduce.file, combine.file))),
+        input, 
+        output, 
+        mapper, 
+        combiner,
+        reducer, 
         input.format.opt, 
         output.format.opt, 
         "2>&1")
     if(verbose) {
       retval = system(final.command)
-      if (retval != 0) stop("hadoop streaming failed with error code ", retval, "\n")}
+      if (retval != 0) stop("hadoop streaming failed with error code ", retval, "\n")
+      NULL}
     else {
-      console.output = tryCatch(system(final.command, intern = TRUE), 
-                                warning = function(e) stop(e)) 
-      retval = 0}
-    retval}
+      console.output = 
+        tryCatch(
+          system(final.command, intern = TRUE), 
+          warning = function(e) stop(e)) 
+      list(
+        application.id = 
+          gsub(
+            "^.*Submitted application ([a-zA-Z_][a-zA-Z0-9_]+).*$", 
+            "\\1", 
+            grep("^.*Submitted application", console.output, value=T)),
+        job.id = 
+          gsub(
+            "^.*Running job: ([a-zA-Z_][a-zA-Z0-9_]+).*$",
+            "\\1",
+            grep("Running job:", console.output, value=T)))}}
 
 
 #mapreduce env
@@ -443,13 +464,29 @@ hadoop.cmd =
 
 hdfs.cmd = 
   function() {
-    alternatives = 
-      c(
-        Sys.getenv("HDFS_CMD"),
-        file.path(dirname(hadoop.cmd()), "hdfs"),
-        file.path(Sys.getenv("HADOOP_HOME"), "bin", "hdfs"),
-        hadoop.cmd())
-    alternatives[min(which(sapply(alternatives, file.exists)))]}
+    alternatives =
+      list(
+        function() Sys.getenv("HDFS_CMD"),
+        function() file.path(dirname(hadoop.cmd()), "hdfs"),
+        function() file.path(Sys.getenv("HADOOP_HOME"), "bin", "hdfs"),
+        function() {
+          cmd = {
+            if(.Platform$OS.type != "windows"){
+              suppressWarnings(
+                system2(
+                  command = "which", 
+                  args = "hdfs", 
+                  stdout = TRUE, 
+                  stderr = FALSE))}
+            else ""}
+          if (length(cmd) == 0) cmd = ""
+          cmd},
+        hadoop.cmd)
+    for (f in alternatives) {
+      cmd = f()
+      if(file.exists(cmd))
+        return(cmd)}
+    stop("Can't find an alternative for hdfs command")}
 
 hadoop.streaming = 
   function() {
@@ -458,6 +495,7 @@ hadoop.streaming =
       hadoop_home = Sys.getenv("HADOOP_HOME")
       if(hadoop_home == "") stop("Please make sure that the env. variable HADOOP_STREAMING is set")
       stream.jar = list.files(path = file.path(hadoop_home, "contrib", "streaming"), pattern = "jar$", full.names = TRUE)
+      if(stream.jar == "") stop("Can't find streaming jar, please set env. variable HADOOP_STREAMING")
       paste(hadoop.cmd(), "jar", stream.jar)}
     else paste(hadoop.cmd(), "jar", hadoop_streaming)}
 
@@ -466,8 +504,8 @@ nonempty.or.null =
     function() {
       x = Sys.getenv(var)
       if(x == "") NULL else x} 
-  
+
 current.task = nonempty.or.null("mapred_task_id")
-    
+
 current.job = nonempty.or.null("mapred_job_id")
 

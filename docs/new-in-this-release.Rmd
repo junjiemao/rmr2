@@ -1,12 +1,8 @@
-# What's new in 3.1.1
+---
+title: "What's new in `rmr2` x.y.z"
+output: 
+  html_document:
+    keep_md: true 
+---
 
-## Bugs Fixed
-
-* support for `Date` columns in data frames
-* support for logical NAs
-* uses Imports when possible
-
-## Enhancement
-
-* drop use of deprecated `-file` streaming option
-* switch to the new and improved quickcheck 2.0.0 for testing
+We switched to using the github [release page](https://github.com/RevolutionAnalytics/rmr2/releases). Please head there and update your links or bookmarks.

@@ -41,13 +41,15 @@ enum type_code {
   TB_VECTOR = 8,
   TB_LIST = 9,
   TB_MAP = 10,
-  R_NATIVE = 144,
-  R_VECTOR = 145,
-  R_CHAR_VECTOR = 146,
-  R_WITH_ATTRIBUTES = 147,
-  R_NULL = 148,
-  R_LOGICAL = 149};
-
+  R_NATIVE = 144, //0x90
+  R_VECTOR = 145, //0x91
+  R_CHAR_VECTOR = 146, //0x92
+  R_WITH_ATTRIBUTES = 147, //0x93
+  R_NULL = 148, //0x94
+  R_LOGICAL = 149,  //0x95
+  R_NA_CHAR = 150, //0x96
+  TYPE_UNKNOWN = 255};
+  
 typedef deque<unsigned char> raw;
 
 template<typename T> 
@@ -180,19 +182,22 @@ vector<T> unserialize_vector(const raw & data, unsigned int & start, int raw_len
     vec[i] = unserialize_scalar<T>(data, start);}
   return vec;}
   
-template <>
-vector<string> unserialize_vector<string>(const raw & data, unsigned int & start, int raw_length) {
+CharacterVector unserialize_character_vector(const raw & data, unsigned int & start, int raw_length) {
   int v_length = get_length(data, start);
-  vector<string> retval(v_length);
+  CharacterVector retval(v_length);
   for(unsigned int i = 0; i < v_length; i++) {
-    get_type(data, start); //we know it's 07 already
-    int str_length = get_length(data, start);
-    vector<char> tmp_vec_char = unserialize_vector<char>(data, start, str_length);
-    string tmp_string(tmp_vec_char.begin(), tmp_vec_char.end());
-    retval[i] = tmp_string;}
+    if(get_type(data, start) == TB_STRING) { 
+      int str_length = get_length(data, start);
+      vector<char> tmp_vec_char = unserialize_vector<char>(data, start, str_length);
+      string tmp_string(tmp_vec_char.begin(), tmp_vec_char.end());
+      retval[i] = tmp_string;}
+    else { //RA_NA_CHAR
+      get_length(data, start); // always 0, but must read
+      retval[i] = NA_STRING;
+    }}
   return retval;}
       
-RObject unserialize(const raw & data, unsigned int & start, int type_code = 255);
+RObject unserialize(const raw & data, unsigned int & start, int type_code = TYPE_UNKNOWN);
 
 List unserialize_list(const raw & data, unsigned int & start) {
   int length = get_length(data, start);
@@ -231,7 +236,7 @@ RObject unserialize_native(const raw & data, unsigned int & start) {
 
 RObject unserialize(const raw & data, unsigned int & start, int type_code){
   RObject new_object;
-  if(type_code == 255) {
+  if(type_code == TYPE_UNKNOWN) {
     type_code = get_type(data, start);}
   switch(type_code) {
     case TB_BYTES: { 
@@ -258,7 +263,8 @@ RObject unserialize(const raw & data, unsigned int & start, int type_code){
       break;
     case TB_STRING: {
       int length = get_length(data, start);
-      vector<char> vec_tmp = unserialize_vector<char>(data, start, length);
+      vector<char> vec_tmp = unserialize_vector<char>(data, start, length); 
+      // unserialize_vector needs raw_length, luckily here they are the same
       new_object =  wrap(string(vec_tmp.begin(), vec_tmp.end()));}
       break;
     case TB_VECTOR:
@@ -279,9 +285,9 @@ RObject unserialize(const raw & data, unsigned int & start, int type_code){
       break;
     case R_WITH_ATTRIBUTES: {
       get_length(data, start);
-      new_object = unserialize(data, start, 255);
-      CharacterVector names(unserialize(data, start, 255));
-      List attributes(unserialize(data, start, 255));
+      new_object = unserialize(data, start, TYPE_UNKNOWN);
+      CharacterVector names(unserialize(data, start, TYPE_UNKNOWN));
+      List attributes(unserialize(data, start, TYPE_UNKNOWN));
       for(unsigned int i = 0; i < names.size(); i++) {
         char * c = names[i]; //workaround Rcpp bug now fixed, remove if assuming 0.10.2 and higher
         string s(c); 
@@ -330,7 +336,7 @@ RObject unserialize(const raw & data, unsigned int & start, int type_code){
       break;
     case R_CHAR_VECTOR: {
         int raw_length = get_length(data, start);
-        new_object = wrap(unserialize_vector<string>(data, start, raw_length));}
+        new_object = wrap(unserialize_character_vector(data, start, raw_length));}
       break;
     default: {
       throw UnsupportedType(type_code);}}
@@ -424,14 +430,14 @@ void serialize_vector(T & data, unsigned char type_code, raw & serialized, bool 
     serialized.push_back(type_code);
     for(typename T::iterator i = data.begin(); i < data.end(); i++) {
       serialize_scalar(*i, 255, serialized);}}
+  else {
+    if(data.size() == 1) {
+      serialize_scalar(data[0], type_code, serialized);}
     else {
-      if(data.size() == 1) {
-        serialize_scalar(data[0], type_code, serialized);}
-      else {
-        serialized.push_back(TB_VECTOR);
-        length_header(data.size(), serialized); 
-        for(typename T::iterator i = data.begin(); i < data.end(); i++) {
-          serialize_scalar(*i, type_code, serialized);}}}}
+      serialized.push_back(TB_VECTOR);
+      length_header(data.size(), serialized); 
+      for(typename T::iterator i = data.begin(); i < data.end(); i++) {
+        serialize_scalar(*i, type_code, serialized);}}}}
 
 void serialize_list(List & data, raw & serialized, bool native){
   serialized.push_back(TB_VECTOR);
@@ -448,15 +454,15 @@ void serialize_native(const RObject & object, raw & serialized) {
   length_header(tmp.size(), serialized);
   serialized.insert(serialized.end(), tmp.begin(), tmp.end());}
 
-void serialize_null(raw & serialized) {
-  serialized.push_back(R_NULL);
+void serialize_special_value(unsigned char type_code, raw & serialized) {
+  serialized.push_back(type_code);
   length_header(0, serialized);}
 
 void serialize_noattr(const RObject & object, raw & serialized, bool native) {
   if(native) {
     switch(object.sexp_type()) {
       case NILSXP: {
-        serialize_null(serialized);}
+        serialize_special_value(R_NULL, serialized);}
       break;
       case RAWSXP: {//raw
       RawVector data(object);
@@ -472,14 +478,19 @@ void serialize_noattr(const RObject & object, raw & serialized, bool native) {
       break;
       case STRSXP: { //character
         CharacterVector data(object);
+        LogicalVector na_mask = is_na(data);
         serialized.push_back(R_CHAR_VECTOR);
         int raw_size = data.size() * 5 + 4;
         for(unsigned int i = 0; i < data.size(); i++) {
-          raw_size += data[i].size();}
+          if(!na_mask[i]) {
+            raw_size += data[i].size();}}
         length_header(raw_size, serialized);
         length_header(data.size(), serialized);
         for(unsigned int i = 0; i < data.size(); i++) {
-          serialize_many(data[i], TB_STRING, serialized);}}
+          if(na_mask[i]) {
+            serialize_special_value(R_NA_CHAR, serialized);}
+          else {    
+            serialize_many(data[i], TB_STRING, serialized);}}}
       break; 
       case INTSXP: {
         IntegerVector data(object);  

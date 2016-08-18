@@ -16,29 +16,24 @@ library(quickcheck)
 library(rmr2)
 
 #has.rows
-unit.test(
-  function(x) {
-    is.null(nrow(x)) == !rmr2:::has.rows(x)},
-  list(make.rany()))
+test(
+  function(x = rmr2:::rrmr.data()) {
+    is.null(nrow(x)) == !rmr2:::has.rows(x)})
 
 #all.have rows TODO
 #rmr.length TODO
 
 #keyval, keys.values
-unit.test(
-  function(x){
-    k = x
-    v = lapply(x, function(x) make.rany()())
+test(
+  function(k = rmr2:::rrmr.data(size = c(min = 1)), v = rmr2:::rrmr.data(size = ~rmr2:::rmr.length(k))){
     kv = keyval(k, v)
     identical(keys(kv), k) &&
-      identical(values(kv), v)},
-  list(make.rany()))
+      identical(values(kv), v)})
 
 #NULL key case
-unit.test(
-  function(v){
+test(
+  function(v = rmr2:::rrmr.data(size = c(min = 1))){
     k = NULL
     kv = keyval(k, v)
     identical(keys(kv), k) &&
-      identical(values(kv), v)},
-  list(make.rany()))
+      identical(values(kv), v)})

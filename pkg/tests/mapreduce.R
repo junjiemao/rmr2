@@ -14,6 +14,8 @@
 
 library(quickcheck)
 library(rmr2)
+library(rhdfs)
+hdfs.init()
 
 kv.cmp = rmr2:::kv.cmp
 
@@ -24,78 +26,74 @@ for (be in c("local", "hadoop")) {
   ##from.dfs to.dfs
   
   ##native
-  unit.test(
-    function(kv) 
+  test(
+    function(kv = rmr2:::rkeyval()) 
       kv.cmp(
         kv, 
-        from.dfs(to.dfs(kv))),
-    generators = list(rmr2:::rkeyval),
-    sample.size = 10)
+        from.dfs(to.dfs(kv))))
   
   ## csv
-  unit.test(
-    function(df) 
+  ## no support for raw in csv
+ 
+  test(
+    function(df = rmr2:::rdata.frame.simple()) 
       kv.cmp(
         keyval(NULL, df),
         from.dfs(
           to.dfs(
             keyval(NULL, df), 
             format = "csv"), 
-          format = "csv")),
-    generators = list(rdata.frame),
-    sample.size = 10)
+          format = "csv")))
   
   #json
   fmt = "json"
-  unit.test(
-    function(df) 
+  test(
+    function(df = rmr2:::rdata.frame.simple()) 
       kv.cmp(
         keyval(1, df), 
         from.dfs(
           to.dfs(
             keyval(1, df), 
             format = fmt), 
-          format = make.input.format("json", key.class = "list", value.class = "data.frame"))), 
-    generators = list(rdata.frame),
-    sample.size = 10)
+          format = make.input.format("json", key.class = "list", value.class = "data.frame"))))
   
   #sequence.typedbytes
   seq.tb.data.loss = 
     function(l)
       rapply(
         l,
-        function(x) if(class(x) == "raw" || length(x) == 1) x else as.list(x),
+        function(x){ 
+          if(class(x) == "Date") x = unclass(x)
+          if(is.factor(x)) x = as.character(x)
+          if(class(x) == "raw" || length(x) == 1) x else as.list(x)},
         how = "replace")    
   
   fmt = "sequence.typedbytes"
-  unit.test(
-    function(l) 
+  test(
+    function(l = rlist()) {
+      l = c(0, l)
+      kv = keyval(seq.tb.data.loss(list(1)), seq.tb.data.loss(l))
       kv.cmp(
-        keyval(seq.tb.data.loss(list(1)), seq.tb.data.loss(l)),
+        kv,
         from.dfs(
           to.dfs(
-            keyval(1, l), 
+            kv,
             format = fmt), 
-          format = fmt)), 
-    generators = list(rlist),
-    precondition = function(l) length(l) > 0,
-    sample.size = 10)
+          format = fmt))})
   
   ##mapreduce
   
   ##simplest mapreduce, all default
-  unit.test(
-    function(kv) {
-    if(rmr2:::length.keyval(kv) == 0) TRUE
-    else {
-      kv1 = from.dfs(mapreduce(input = to.dfs(kv)))
-      kv.cmp(kv, kv1)}},
-    generators = list(rmr2:::rkeyval),
-    sample.size = 10)
+  test(
+    function(kv = rmr2:::rkeyval()) {
+      if(rmr2:::length.keyval(kv) == 0) TRUE
+      else {
+        kv1 = from.dfs(mapreduce(input = to.dfs(kv)))
+        kv.cmp(kv, kv1)}})
   
   ##put in a reduce for good measure
-  unit.test(
-    function(kv) {
+  test(
+    function(kv = rmr2:::rkeyval()) {
       if(rmr2:::length.keyval(kv) == 0) TRUE
       else {
         kv1 = 
@@ -103,13 +101,11 @@ for (be in c("local", "hadoop")) {
             mapreduce(
               input = to.dfs(kv),
               reduce = to.reduce(identity)))
-        kv.cmp(kv, kv1)}},
-    generators = list(rmr2:::rkeyval),
-    sample.size = 10)
+        kv.cmp(kv, kv1)}})
   
   ## csv
-  unit.test(
-    function(df)
+  test(
+    function(df = rmr2:::rdata.frame.simple())
       kv.cmp(
         keyval(NULL, df),
         from.dfs(
@@ -119,15 +115,13 @@ for (be in c("local", "hadoop")) {
               format = "csv"),
             input.format = "csv",
             output.format = "csv"),
-          format = "csv")),
-    generators = list(rdata.frame),
-    sample.size = 10, stop = FALSE)
+          format = "csv")))
   
   #json
   # a more general test would be better for json but the subtleties of mapping R to to JSON are many
   fmt = "json"
-  unit.test(
-    function(df) 
+  test(
+    function(df = rmr2:::rdata.frame.simple()) 
       kv.cmp(
         keyval(1, df),
         from.dfs(
@@ -137,27 +131,58 @@ for (be in c("local", "hadoop")) {
               format = fmt),
             input.format = make.input.format("json", key.class = "list", value.class = "data.frame"),
             output.format = fmt),
-          format = make.input.format("json", key.class = "list", value.class = "data.frame"))),
-    generators = list(rdata.frame),
-    sample.size = 10)
+          format = make.input.format("json", key.class = "list", value.class = "data.frame"))))
   
   #sequence.typedbytes
   fmt = "sequence.typedbytes"
-  unit.test(
-    function(l) {
+  test(
+    function(l = rlist()) {
+      l = c(0, l)
+      kv = keyval(seq.tb.data.loss(list(1)), seq.tb.data.loss(l))      
+      l = c(0, l)
       kv.cmp(
-        keyval(seq.tb.data.loss(list(1)), seq.tb.data.loss(l)),
+        kv,
         from.dfs(
           mapreduce(
             to.dfs(
-              keyval(1, l), 
+              kv, 
               format = fmt), 
             input.format = fmt,
             output.format = fmt),
-          format = fmt))}, 
-      generators = list(rlist),
-      precondition = function(l) length(l) > 0,
-      sample.size = 10)
+          format = fmt))})
+  
+  #avro
+  pathname = ravro::AVRO_TOOLS
+  if(.Platform$OS.type == "windows") {
+    subfname = strsplit(pathname, ":")
+    if(length(subfname[[1]]) > 1)
+    {
+      pathname = subfname[[1]][2]
+    }
+    pathname = gsub("\"","",pathname)
+    pathname = shortPathName(pathname)
+    pathname = gsub("\\\\","/",pathname)}
+  Sys.setenv(AVRO_LIBS = pathname)
+  
+  test(
+    function(df = rmr2:::rdata.frame.simple(nrow = c(min = 2))) {
+      if(rmr.options("backend") == "local") TRUE 
+      else {
+        names(df) = sub("\\.", "_", names(df))
+        tf1 = tempfile()
+        ravro:::write.avro(df, tf1)
+        tf2 = "/tmp/rmr2.test.avro"
+        on.exit(hdfs.rm(tf2))
+        hdfs.put(tf1, tf2)
+        kv.cmp(
+          keyval(NULL, df),
+          from.dfs(
+            mapreduce(
+              tf2, 
+              input.format = 
+                make.input.format(
+                  format = "avro",
+                  schema.file = tf1))))}})
   
   #equijoin
   stopifnot(

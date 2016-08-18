@@ -12,7 +12,7 @@ test.rmr =
   function() {
     length(
       suppressWarnings(
-        rmr2:::hdfs("- 2>&1 | grep rmr", intern = TRUE))) > 0}
+        hdfs("- 2>&1 | grep rmr", intern = TRUE))) > 0}
 
 hdfs.rmr = 
   (function() {
@@ -25,8 +25,11 @@ hdfs.rmr =
       else 
         hdfs("rm -r", fname)}})()
 hdfs.isdir = 
-  function(fname)
-    hdfs("test -d", fname, test = TRUE)
+  function(fname) {
+    if(.Platform$OS.type == "windows")
+      length(grep(pattern = "^Found", hdfs("ls", fname, intern = TRUE))) == 1
+    else
+      hdfs("test -d", fname, test = TRUE)}
 hdfs.mv = 
   function(src, dst)
     hdfs("mv", src, dst)
@@ -48,7 +51,11 @@ hdfs =
           hdfs.cmd(), 
           "dfs", 
           paste("-", cmd, sep = ""), 
-          paste(..., collapse=" ")), 
+          paste(
+            sapply(
+              list(...),
+              rmr.normalize.path), 
+            collapse=" ")), 
         intern = intern)
     if(intern)
       retval

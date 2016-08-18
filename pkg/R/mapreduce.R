@@ -20,7 +20,16 @@ rmr.options.env$backend = "hadoop"
 rmr.options.env$profile.nodes = "off"
 rmr.options.env$hdfs.tempdir = "/tmp" #can't check it exists here
 rmr.options.env$exclude.objects = NULL
-rmr.options.env$backend.parameters = list()
+rmr.options.env$backend.parameters =  
+  list(
+    hadoop = 
+      list(
+        D = "mapreduce.map.java.opts=-Xmx400M", 
+        D = "mapreduce.reduce.java.opts=-Xmx400M"))
+
+.onLoad = 
+  function(lib, pkg) 
+    packageStartupMessage("Please review your hadoop settings. See help(hadoop.settings)")
 
 add.last =
   function(action) {
@@ -65,9 +74,6 @@ rmr.options =
       opt.assign("backend.parameters", backend.parameters)
     if(is.named.arg("exclude.objects"))
       opt.assign("exclude.objects", exclude.objects)
-    if (rmr.options.env$backend == "hadoop")
-      if(!hdfs.exists(hdfs.tempdir)) #can't do this at package load time
-        warning("Please set an HDFS temp directory with rmr.options(hdfs.tempdir = ...)")
     read.args = {
       if(is.null(names(args)))
         args
@@ -177,6 +183,17 @@ dfs.mkdir =
       stopifnot(all(dir.create(fname)))
     NULL}
 
+dfs.ls =
+  function(fname) {
+    fname = to.dfs.path(fname)
+    if (rmr.options('backend') == 'hadoop') 
+      hdfs.ls(fname)
+    else{
+      fi = file.info(fname)
+      if(fi$isdir)
+        do.call(rbind, lapply(list.files(fname,full.names = TRUE), file.info))
+      else
+        fi}}
 
 # dfs bridge
 
@@ -190,7 +207,13 @@ to.dfs.path =
 
 loadtb = 
   function(inf, outf)
-    system(paste(hadoop.streaming(),  "loadtb", outf, "<", inf))
+    system(
+      paste(
+        hadoop.streaming(),  
+        "loadtb", 
+        rmr.normalize.path(outf), 
+        "<", 
+        rmr.normalize.path(inf)))
 
 to.dfs = 
   function(
@@ -237,7 +260,16 @@ from.dfs = function(input, format = "native") {
     c.keyval(retval())}
   
   dumptb = function(src, dest){
-    lapply(src, function(x) system(paste(hadoop.streaming(), "dumptb", x, ">>", dest)))}
+    lapply(
+      src, 
+      function(x) 
+        system(
+          paste(
+            hadoop.streaming(), 
+            "dumptb", 
+            rmr.normalize.path(x), 
+            ">>", 
+            rmr.normalize.path(dest))))}
   
   getmerge = function(src, dest) {
     on.exit(unlink(tmp))
@@ -248,7 +280,7 @@ from.dfs = function(input, format = "native") {
         hdfs.get(as.character(x), tmp)
         if(.Platform$OS.type == "windows") {
           cmd = paste('type', tmp, '>>' , dest)
-          system(paste(Sys.getenv("COMSPEC"),"/c",cmd))}
+          system(paste(Sys.getenv("COMSPEC"), "/c", cmd))}
         else {
           system(paste('cat', tmp, '>>' , dest))}
         unlink(tmp)})
@@ -337,7 +369,6 @@ mapreduce = function(
     output = dfs.tempfile()
   if(is.character(input.format)) input.format = make.input.format(input.format)
   if(is.character(output.format)) output.format = make.output.format(output.format)
-  if(!missing(backend.parameters)) warning("backend.parameters is deprecated.")
   
   backend  =  rmr.options('backend')
   
@@ -346,17 +377,23 @@ mapreduce = function(
               local = mr.local, 
               stop("Unsupported backend: ", backend))
   
-  mr(map = map, 
-     reduce = reduce, 
-     combine = combine, 
-     vectorized.reduce,
-     in.folder = if(is.list(input)) {lapply(input, to.dfs.path)} else to.dfs.path(input), 
-     out.folder = to.dfs.path(output), 
-     input.format = input.format, 
-     output.format = output.format, 
-     in.memory.combine = in.memory.combine,
-     backend.parameters = backend.parameters[[backend]], 
-     verbose = verbose)
+  ret = 
+    mr(
+      map = map, 
+      reduce = reduce, 
+      combine = combine, 
+      vectorized.reduce,
+      in.folder = if(is.list(input)) {lapply(input, to.dfs.path)} else to.dfs.path(input), 
+      out.folder = to.dfs.path(output), 
+      input.format = input.format, 
+      output.format = output.format, 
+      in.memory.combine = in.memory.combine,
+      backend.parameters = backend.parameters[[backend]], 
+      verbose = verbose)
+  attributes(output) = 
+    c(
+      attributes(output),
+      ret)
   output
 }
 
@@ -369,22 +406,6 @@ mapreduce = function(
 ## to.dfs(lapply(1:10, function(i) keyval(i, i^3)), "/tmp/reljoin.right")
 ## equijoin(left.input="/tmp/reljoin.left", right.input="/tmp/reljoin.right", output = "/tmp/reljoin.out")
 ## from.dfs("/tmp/reljoin.out")
-
-reduce.default = 
-  function(k, vl, vr) {
-    if((is.list(vl) && !is.data.frame(vl)) || 
-         (is.list(vr) && !is.data.frame(vr)))
-      list(left = vl, right = vr)
-    else{
-      vl = as.data.frame(vl)
-      vr = as.data.frame(vr)
-      names(vl) = paste(names(vl), "l", sep = ".")
-      names(vr) = paste(names(vr), "r", sep = ".")
-      if(all(is.na(vl))) vr
-      else {
-        if(all(is.na(vr))) vl
-        else
-          merge(vl, vr, by = NULL)}}}
 
 equijoin = 
   function(
@@ -436,29 +457,67 @@ equijoin =
     pad.side =
       function(vv, outer) 
         if (length(vv) == 0 && (outer)) c(NA) else c.or.rbind(vv)
-    map = 
+    map = {
       if (is.null(input)) {
         function(k, v) {
           ils = is.left.side(left.input, right.input)
           mark.side(if(ils) map.left(k, v) else map.right(k, v), ils)}}
-    else {
-      function(k, v) {
-        c.keyval(mark.side(map.left(k, v), TRUE), 
-                 mark.side(map.right(k, v), FALSE))}}
+      else {
+        function(k, v) {
+          c.keyval(mark.side(map.left(k, v), TRUE), 
+                   mark.side(map.right(k, v), FALSE))}}}
+    wrap.if.outer = 
+      function(x) 
+        if(outer == "") x else list(x)
+    reduce.default = 
+      function(k, vl, vr) {
+        if((is.list(vl) && !is.data.frame(vl)) || 
+             (is.list(vr) && !is.data.frame(vr)))
+          keyval(key, list(left = vl, right = vr))
+        else{
+          if(!identical(vl, NA)) {
+            vl = as.data.frame(vl)
+            names(vl) = paste(names(vl), "l", sep = ".")}
+          if(!identical(vr, NA)) {
+            vr = as.data.frame(vr)
+            names(vr) = paste(names(vr), "r", sep = ".")}
+          val = {
+            if(identical(vl, NA)) vr
+            else {
+              if(identical(vr, NA)) vl
+              else
+                merge(vl, vr, by = NULL)}}
+          keyval(k, val)}}
     eqj.reduce = 
       function(k, vv) {
         rs = reduce.split(vv)
         left.side = pad.side(rs$`TRUE`, right.outer || full.outer)
         right.side = pad.side(rs$`FALSE`, left.outer || full.outer)
-        if(!is.null(left.side) && !is.null(right.side))
-          reduce(k[[1]], left.side, right.side)}
-    mapreduce(
-      map = map, 
-      reduce = eqj.reduce,
-      input = c(left.input, right.input), 
-      output = output,
-      input.format = input.format,
-      output.format = output.format,)}
+        if(!is.null(left.side) && !is.null(right.side)) {
+          reduce.out = as.keyval(reduce(k[[1]], left.side, right.side))
+          keyval(keys(reduce.out), wrap.if.outer(values(reduce.out)))}}
+    out = 
+      mapreduce(
+        map = map, 
+        reduce = eqj.reduce,
+        input = c(left.input, right.input), 
+        output = output,
+        input.format = input.format,
+        output.format = if(outer == "") output.format else "native",)
+    if(outer == "") out
+    else {
+      template = 
+        values(
+          from.dfs(
+            mapreduce(
+              out, 
+              map = function(k,v) keyval(1, list(plyr::rbind.fill(v)[1,])),
+              reduce = function(k,v) keyval(1, list(plyr::rbind.fill(v)[1,])),
+              combine = TRUE)))[[1]]
+      mapreduce(
+        out,
+        map = function(k,v) plyr::rbind.fill(c(v, list(template[NULL,]))),
+        output.format = output.format)}}
 
 status = function(value)
   cat(

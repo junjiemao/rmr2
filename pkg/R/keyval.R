@@ -15,8 +15,7 @@
 has.rows = function(x) !is.null(nrow(x))
 all.have.rows = Curry(all.predicate, P = has.rows)
 
-rmr.length = 
-  function(x) if(has.rows(x)) nrow(x) else length(x)
+rmr.length = NROW
 
 sapply.rmr.length = 
   function(xx)
@@ -45,8 +44,18 @@ length.keyval =
 keyval = 
   function(key, val = NULL) {
     if(missing(val)) keyval(key = NULL, val = key)
-    else recycle.keyval(list(key = key, val = val))}
-
+    else {
+      if(rmr.length(key) > 0 && rmr.length(val) > 0)
+        return(recycle.keyval(list(key = key, val = val)))
+      else {
+        if(rmr.length(key) == 0 && rmr.length(val) == 0)
+          return(list(key = NULL, val = NULL))
+        else {
+          if(is.null(key) && rmr.length(val) > 0)
+            return(list(key = NULL, val = val))}}
+      rmr.str(list(key, val));
+      stop("invalid key val combination")}}
+      
 keys = function(kv) kv$key
 values = function(kv) kv$val
 
@@ -70,40 +79,17 @@ rmr.slice =
       x[r]}
 
 rmr.recycle = 
-  function(this, upto) {
-    if(is.null(this))
-      NULL
-    else {
-      if(is.null(upto))
-        this
-      else {
-        l.this = rmr.length(this)
-        l.upto = if(is.null(upto)) 1 else rmr.length(upto)
-        if(l.this == l.upto) this
-        else {
-          if(min(l.this,l.upto) == 0)
-            stop("Can't recycle 0-length argument")
-          else
-            rmr.slice(
-              rmr.slice(
-                this,
-                rep(1:rmr.length(this), ceiling(l.upto/l.this))),
-              1:max(l.upto, l.this))}}}}
+  function(args) {
+    index = 
+      suppressWarnings(
+        do.call(cbind, lapply(args, function(x) 1:rmr.length(x))))
+    mapply(
+      rmr.slice, 
+      args, 
+      split(index, col(index)), 
+      SIMPLIFY = FALSE)}
 
-recycle.keyval =
-  function(kv) {
-    k = keys(kv)
-    v = values(kv)
-    if((rmr.length(k) == rmr.length(v)) ||
-         is.null(k))
-      kv
-    else {
-      if(rmr.length(v) == 0)
-        list(key = NULL, value = NULL)
-      else
-        keyval(
-          rmr.recycle(k, v),
-          rmr.recycle(v, k))}}
+recycle.keyval = rmr.recycle
 
 slice.keyval = 
   function(kv, r) {
@@ -208,18 +194,51 @@ split.data.frame.fast =
           x, 
           Curry(split, f = ind, drop = drop)))
     rn = split(rownames(x), f = ind, drop = drop)
-    mapply(function(a, na) {rownames(a) = na; a}, y, rn, SIMPLIFY = FALSE)}
+    mapply(
+      function(a, na) {
+        rownames(a) = na
+        delevel(a)}, 
+      y, 
+      rn, 
+      SIMPLIFY = FALSE)}
+
+split.Date = 
+  function (x, f, drop = FALSE, ...) {
+    y = split.default(if(is.double(x)) x else as.integer(x), f, drop = drop)
+    for (i in seq_along(y)) class(y[[i]]) = "Date"
+    y}
 
 split.data.frame.fastest = 
   function(x, ind, drop, keep.rownames) 
     t.list(
       lapply(
         if(keep.rownames) row.names.to.column(x) else x, 
-        function(y) 
-          split(
-            if(is.factor(y)) as.character(y) else y, 
-            f = ind, 
-            drop = drop)))
+        function(y) {
+          if(class(y) == "Date")
+            split.Date(y, f = ind, drop = drop)
+          else 
+            split(
+              if(is.factor(y)) as.character(y) else y, 
+              f = ind, 
+              drop = drop)}))
+
+deraw = function(x) UseMethod("deraw")
+
+deraw.raw = as.integer
+
+deraw.matrix = 
+  function(x) {
+    xi = deraw(unclass(x))
+    attributes(xi) = attributes(x)
+    xi}
+    
+deraw.data.frame =
+  function(x) {
+    y = lapply(x, deraw)
+    attributes(y) = attributes(x)
+    y}
+    
+deraw.default = identity
 
 rmr.split = 
   function(x, ind, lossy, keep.rownames) {
@@ -231,7 +250,12 @@ rmr.split =
           if(lossy) Curry(split.data.frame.fastest, keep.rownames = keep.rownames)
           else split.data.frame.fast},
         split)
-    y = spl(x,ind, drop = TRUE)
+    was.factor = is.factor(x)
+    if(was.factor) x = as.character(x)
+    ind = deraw(ind)
+    y = spl(x, ind, drop = TRUE)
+    if(was.factor)
+      y = lapply(y, as.factor)
     if (is.matrix(ind))
       ind = as.data.frame(ind)
     perm = NULL
@@ -250,6 +274,15 @@ row.names.to.column =
   function(df){
     df[, ncol(df) + 1] = rownames(df)
     df}
+
+defactor = 
+  function(x)
+    lapply(
+      x,
+      function(y){
+        if(is.factor(y))
+          as.character(y)
+        else y})
 
 split.keyval = function(kv, size, lossy = FALSE) {
   k = keys(kv)
@@ -270,7 +303,12 @@ split.keyval = function(kv, size, lossy = FALSE) {
         v = values(kv)
         ind = {
           if(is.list(k) && !is.data.frame(k)) 
-            cksum(k)
+            sapply(
+              k, 
+              function(x) {
+                if(is.factor(x)) x = as.character(x)
+                attributes(x) = NULL 
+                digest(x)})
           else {
             if(is.matrix(k))
               as.data.frame(k)
@@ -280,15 +318,18 @@ split.keyval = function(kv, size, lossy = FALSE) {
               else
                 k}}}
         x = k 
-        if(!has.rows(x)) 
+        if(has.rows(x)) {
+          rownames(x) = NULL
+          x = x[!duplicated(ind), , drop = FALSE]}
+        else {
           names(x) = NULL
-        x = unique(x)
+          x = x[!duplicated(ind)]}          
         x = 
           switch(
             class(x),
             list = split(x, 1:length(x)),
-            data.frame = if(lossy) t.list(x) else rmr.split(x, x , FALSE, keep.rownames = FALSE),
-            matrix = if(lossy) t.list(as.data.frame(x)) else rmr.split(x, as.data.frame(x), FALSE, keep.rownames = FALSE),
+            data.frame = if(lossy) t.list(defactor(x)) else rmr.split(x, x , FALSE, keep.rownames = FALSE),
+            matrix = rmr.split(x, as.data.frame(x, stringsAsFactors = FALSE), lossy = lossy, keep.rownames = FALSE),
             factor = as.list(as.character(x)),
             as.list(x))
         keyval(x, unname(rmr.split(v, ind, lossy = lossy, keep.rownames = TRUE)))}}}}
@@ -304,6 +345,8 @@ reduce.keyval =
       stop("Must specify key when using reduce or combine functions")) {
     k = keys(kv)
     kvs = split.keyval(kv, split.size)
+    kvs$key = lapply(keys(kvs), function(x) if(is.factor(k)) as.factor(x) else as(x, class(k)))
+    kvs$val = lapply(values(kvs), function(x) if(is.factor(values(kv))) as.factor(x) else as(x, class(values(kv))))
     if(is.null(k)) 
       lapply(values(kvs), function(v) FUN(NULL,v))
     else
